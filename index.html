@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>推移表コンバーター</title>
+<meta name="description" content="損益計算書（月次推移）CSVを推移表フォーマットのExcelに再集計します。ファイルはブラウザ内だけで処理されます。">
+<style>
+:root {
+  --bg: #f6f5f2; --panel: #ffffff; --ink: #1d1c1a; --muted: #6b6862; --line: #e3e0da;
+  --accent: #8a5a2b; --accent-ink: #ffffff; --soft: #f3ece4; --ok: #2f7d4f; --ng: #b3412f; --warn: #fff4d6;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #171614; --panel: #211f1c; --ink: #ece9e3; --muted: #a29d94; --line: #36332e;
+    --accent: #d39b62; --accent-ink: #1b1309; --soft: #2c2620; --ok: #6cc391; --ng: #ef8a78; --warn: #3a3220;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink);
+  font: 15px/1.6 "Hiragino Sans", "Yu Gothic UI", "Meiryo", system-ui, sans-serif; }
+main { max-width: 1100px; margin: 0 auto; padding: 32px 16px 64px; }
+h1 { font-size: 24px; margin: 0 0 4px; letter-spacing: .02em; }
+.lead { color: var(--muted); margin: 0 0 24px; }
+section.card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 20px; margin-bottom: 16px; }
+h2 { font-size: 16px; margin: 0 0 12px; display: flex; align-items: center; gap: 8px; }
+h2 .step { display: inline-grid; place-items: center; width: 24px; height: 24px; border-radius: 50%;
+  background: var(--accent); color: var(--accent-ink); font-size: 13px; }
+#drop { border: 2px dashed var(--line); border-radius: 10px; padding: 32px 16px; text-align: center; cursor: pointer;
+  transition: border-color .15s, background .15s; }
+#drop.over, #drop:hover { border-color: var(--accent); background: var(--soft); }
+#drop strong { display: block; font-size: 16px; margin-bottom: 4px; }
+#drop small { color: var(--muted); }
+#fileName { margin-top: 10px; color: var(--muted); font-size: 14px; }
+.settings { display: flex; flex-wrap: wrap; gap: 16px 28px; align-items: center; }
+.settings label { display: flex; align-items: center; gap: 8px; }
+input[type=number] { width: 90px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); font: inherit; }
+select { padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); font: inherit; max-width: 100%; }
+button.primary { background: var(--accent); color: var(--accent-ink); border: 0; border-radius: 8px; padding: 12px 22px;
+  font: inherit; font-weight: 700; cursor: pointer; }
+button.primary:disabled { opacity: .4; cursor: not-allowed; }
+button.link { background: none; border: 0; color: var(--accent); cursor: pointer; font: inherit; padding: 0; text-decoration: underline; }
+.hidden { display: none !important; }
+.err { color: var(--ng); font-weight: 600; margin-top: 10px; }
+.scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; font-variant-numeric: tabular-nums; }
+th, td { padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th { text-align: left; color: var(--muted); font-weight: 600; background: var(--panel); }
+td.n, th.n { text-align: right; }
+tr.unknown td { background: var(--warn); }
+tr.excluded td { color: var(--muted); text-decoration: line-through; }
+tr.excluded td:last-child { text-decoration: none; }
+tr.calc td { font-weight: 700; background: var(--soft); }
+tr.sep td { border-top: 2px solid var(--line); }
+.preview td:first-child, .preview th:first-child { position: sticky; left: 0; background: var(--panel); }
+.preview tr.calc td:first-child { background: var(--soft); }
+.checks { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; }
+.check { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
+.check b { display: block; font-size: 13px; color: var(--muted); font-weight: 600; }
+.check .v { font-size: 17px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.check .s { font-size: 13px; }
+.ok { color: var(--ok); } .ng { color: var(--ng); }
+.note { color: var(--muted); font-size: 13px; margin: 8px 0 0; }
+.dl { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; }
+.tag { font-size: 12px; padding: 1px 6px; border-radius: 4px; background: var(--warn); color: var(--ink); }
+footer { color: var(--muted); font-size: 12px; text-align: center; margin-top: 24px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>推移表コンバーター</h1>
+  <p class="lead">損益計算書（月次推移）のCSVをアップロードすると、推移表の項目に再集計したExcelをダウンロードできます。ファイルはこのブラウザの中だけで処理され、外部には送信されません。</p>
+
+  <section class="card">
+    <h2><span class="step">1</span>CSVを選ぶ</h2>
+    <div id="drop" tabindex="0" role="button" aria-label="CSVファイルを選択">
+      <strong>ここにCSVをドロップ、またはクリックして選択</strong>
+      <small>例：損益計算書_月次推移_店舗A.csv（Shift_JIS / UTF-8 どちらも可）</small>
+    </div>
+    <input id="file" type="file" accept=".csv,text/csv" class="hidden">
+    <div id="fileName"></div>
+    <div id="error" class="err hidden"></div>
+  </section>
+
+  <div id="result" class="hidden">
+    <section class="card">
+      <h2><span class="step">2</span>設定</h2>
+      <div class="settings">
+        <label>最初の月（<span id="firstMonth">10月</span>）の年 <input id="startYear" type="number" min="2000" max="2100"></label>
+        <label id="adjWrap"><input id="adj" type="checkbox" checked> 「決算整理」列を最終月（<span id="lastMonth">9月</span>）に含める</label>
+      </div>
+      <p class="note">シート名は最終月の年（例：2022年10月〜2023年9月なら「2023」）になります。</p>
+    </section>
+
+    <section class="card">
+      <h2><span class="step">3</span>集計の確認</h2>
+      <div class="checks" id="checks"></div>
+      <p class="note" id="checkNote"></p>
+    </section>
+
+    <section class="card">
+      <h2>推移表プレビュー</h2>
+      <div class="scroll"><table class="preview" id="preview"></table></div>
+    </section>
+
+    <section class="card">
+      <h2>勘定科目の振り分け <span id="unknownTag" class="tag hidden"></span></h2>
+      <p class="note" style="margin:0 0 10px">各勘定科目の集計先を変更できます。黄色の行は推移表に同じ名前の項目がなく「雑費」に入れた科目です。変更はこのブラウザに保存され、次回も使われます。
+        <button class="link" id="resetMap">初期設定に戻す</button></p>
+      <div class="scroll"><table id="mapping"></table></div>
+    </section>
+
+    <section class="card">
+      <h2><span class="step">4</span>ダウンロード</h2>
+      <div class="dl">
+        <button class="primary" id="download">推移表（.xlsx）をダウンロード</button>
+        <span class="note" id="outName" style="margin:0"></span>
+      </div>
+    </section>
+  </div>
+
+  <footer>処理はすべてブラウザ内で完結します。</footer>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
+<script src="convert.js"></script>
+<script>
+(function () {
+  'use strict';
+  const C = window.PLConvert;
+  const $ = id => document.getElementById(id);
+  const STORE = 'pl-convert-mapping-v1';
+  const yen = v => (v === '' || v == null) ? '' : Math.round(v).toLocaleString('ja-JP');
+  const pct = v => (v === '' || v == null) ? '' : (v * 100).toFixed(1) + '%';
+  const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+  let pl = null, baseName = 'output', overrides = load();
+
+  function load() { try { return JSON.parse(localStorage.getItem(STORE) || '{}'); } catch (e) { return {}; } }
+  function save() { try { localStorage.setItem(STORE, JSON.stringify(overrides)); } catch (e) { /* 保存できなくても動作は継続 */ } }
+
+  // ---- ファイル選択 ----
+  const drop = $('drop'), input = $('file');
+  drop.addEventListener('click', () => input.click());
+  drop.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); input.click(); } });
+  drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('over'); });
+  drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+  drop.addEventListener('drop', e => { e.preventDefault(); drop.classList.remove('over'); if (e.dataTransfer.files[0]) handle(e.dataTransfer.files[0]); });
+  input.addEventListener('change', () => { if (input.files[0]) handle(input.files[0]); input.value = ''; });
+
+  async function handle(file) {
+    $('error').classList.add('hidden');
+    try {
+      const buf = await file.arrayBuffer();
+      loadText(C.decode(buf), file.name);
+    } catch (e) {
+      showError(e.message || String(e));
+    }
+  }
+
+  function loadText(text, name) {
+    try {
+      pl = C.parsePL(text);
+    } catch (e) {
+      $('result').classList.add('hidden');
+      showError(e.message || String(e));
+      return;
+    }
+    baseName = name.replace(/\.[^.]+$/, '');
+    $('fileName').textContent = '読み込み済み：' + name;
+    $('firstMonth').textContent = pl.months[0];
+    $('lastMonth').textContent = pl.months[pl.months.length - 1];
+    $('adjWrap').classList.toggle('hidden', !pl.hasAdj);
+    $('startYear').value = guessYear(name);
+    $('result').classList.remove('hidden');
+    render();
+  }
+  window.__loadText = loadText; // 動作確認用
+
+  function guessYear(name) {
+    const m = name.match(/(20\d{2})/);
+    if (m) return +m[1];
+    // 直近に終わった期の開始年（最初の月が今月以降なら前年）
+    const now = new Date();
+    const first = parseInt(pl.months[0], 10);
+    const last = parseInt(pl.months[pl.months.length - 1], 10);
+    const endYear = (now.getMonth() + 1) > last ? now.getFullYear() : now.getFullYear() - 1;
+    return first > last ? endYear - 1 : endYear;
+  }
+
+  function showError(msg) { const el = $('error'); el.textContent = msg; el.classList.remove('hidden'); }
+
+  // ---- 表示 ----
+  const adjIndex = () => (pl.hasAdj && $('adj').checked) ? pl.months.length - 1 : -1;
+  let current = null;
+
+  function render() {
+    current = C.aggregate(pl, overrides, { adjMonthIndex: adjIndex() });
+    renderChecks();
+    renderPreview();
+    renderMapping();
+    $('outName').textContent = fileName();
+  }
+
+  function renderChecks() {
+    const list = C.checks(pl, current.values, adjIndex());
+    const changed = current.mapped.some(m => !m.isDefault);
+    $('checks').innerHTML = list.map(c => {
+      let s = '';
+      if (c.csv == null) s = '<span class="s">CSVに合計行なし</span>';
+      else if (Math.round(c.diff) === 0) s = '<span class="s ok">✓ CSVの合計と一致</span>';
+      else s = `<span class="s ng">CSVとの差 ${yen(c.diff)}</span>`;
+      return `<div class="check"><b>${esc(c.label)}（年計）</b><div class="v">${yen(c.mine)}</div>${s}</div>`;
+    }).join('');
+    $('checkNote').textContent = changed
+      ? '振り分けを変更・除外した科目があるため、CSVの合計と差が出ることがあります。'
+      : '振り分けは初期設定のままです。';
+  }
+
+  function renderPreview() {
+    const n = pl.months.length, v = current.values, d = C.derive(v, n);
+    const sum = a => a.reduce((x, y) => x + y, 0);
+    const rows = [];
+    const head = '<tr><th>勘定科目</th>' + pl.months.map(m => `<th class="n">${esc(m)}</th>`).join('') + '<th class="n">合計</th></tr>';
+    const line = (label, arr, total, cls, fmt) =>
+      `<tr class="${cls || ''}"><td>${esc(label)}</td>` + arr.map(x => `<td class="n">${(fmt || yen)(x)}</td>`).join('') + `<td class="n">${(fmt || yen)(total)}</td></tr>`;
+    const r = (a, b) => b ? a / b : '';
+    const S = sum(v['売上高']), G = sum(v['売上原価']), L = sum(v['人件費']);
+    rows.push(line('売上高', v['売上高'], S));
+    rows.push(line('売上原価', v['売上原価'], G));
+    rows.push(line('売上総損益', d.map(x => x.gross), S - G, 'calc'));
+    rows.push(line('原価率', v['売上原価'].map((x, i) => r(x, v['売上高'][i])), r(G, S), '', pct));
+    rows.push(line('人件費率', v['人件費'].map((x, i) => r(x, v['売上高'][i])), r(L, S), '', pct));
+    rows.push(line('FL', v['売上高'].map((s, i) => s ? (v['売上原価'][i] + v['人件費'][i]) / s : ''), S ? (G + L) / S : '', '', pct));
+    C.SGA_ITEMS.forEach((k, i) => rows.push(line(k, v[k], sum(v[k]), i === 0 ? 'sep' : '')));
+    rows.push(line('販売管理費計', d.map(x => x.sga), sum(d.map(x => x.sga)), 'calc'));
+    rows.push(line('営業損益金額', d.map(x => x.op), sum(d.map(x => x.op)), 'calc'));
+    rows.push(line('営業外収益', v['営業外収益'], sum(v['営業外収益'])));
+    rows.push(line('営業外費用', v['営業外費用'], sum(v['営業外費用'])));
+    rows.push(line('経常損益金額', d.map(x => x.ord), sum(d.map(x => x.ord)), 'calc'));
+    $('preview').innerHTML = '<thead>' + head + '</thead><tbody>' + rows.join('') + '</tbody>';
+  }
+
+  function renderMapping() {
+    const options = [...C.ITEMS, C.EXCLUDE];
+    let unknown = 0;
+    const body = current.mapped.map((m, idx) => {
+      const isUnknown = !m.known && m.isDefault;
+      if (isUnknown) unknown++;
+      const cls = m.target === C.EXCLUDE ? 'excluded' : (isUnknown ? 'unknown' : '');
+      const sel = `<select data-i="${idx}" aria-label="${esc(m.name)}の集計先">` +
+        options.map(o => `<option${o === m.target ? ' selected' : ''}>${esc(o)}</option>`).join('') + '</select>';
+      return `<tr class="${cls}"><td>${esc(m.section)}</td><td>${esc(m.name)}${m.sub ? '／' + esc(m.sub) : ''}</td>` +
+        `<td class="n">${yen(m.total)}</td><td>${m.sign < 0 ? '控除（−）' : ''}</td><td>${sel}</td></tr>`;
+    }).join('');
+    $('mapping').innerHTML = '<thead><tr><th>区分</th><th>勘定科目／補助科目</th><th class="n">年計</th><th>符号</th><th>集計先</th></tr></thead><tbody>' + body + '</tbody>';
+    const tag = $('unknownTag');
+    tag.textContent = `要確認 ${unknown}件`;
+    tag.classList.toggle('hidden', unknown === 0);
+    $('mapping').querySelectorAll('select').forEach(s => s.addEventListener('change', () => {
+      const m = current.mapped[+s.dataset.i];
+      const def = C.defaultMapping(m).target;
+      if (s.value === def) delete overrides[m.key]; else overrides[m.key] = s.value;
+      save(); render();
+    }));
+  }
+
+  $('adj').addEventListener('change', () => pl && render());
+  $('startYear').addEventListener('input', () => pl && ($('outName').textContent = fileName()));
+  $('resetMap').addEventListener('click', () => { overrides = {}; save(); if (pl) render(); });
+
+  function fileName() { return `推移表_${baseName}.xlsx`; }
+
+  $('download').addEventListener('click', async () => {
+    if (!pl) return;
+    const year = parseInt($('startYear').value, 10);
+    if (!year) { showError('最初の月の年を入力してください。'); return; }
+    const btn = $('download');
+    btn.disabled = true;
+    try {
+      const wb = C.buildWorkbook(window.ExcelJS, pl, current.values, { startYear: year });
+      const buf = await wb.xlsx.writeBuffer();
+      const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = fileName();
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    } catch (e) {
+      showError('Excelの作成に失敗しました：' + (e.message || e));
+    } finally {
+      btn.disabled = false;
+    }
+  });
+})();
+</script>
+</body>
+</html>
