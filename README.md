@@ -33,3 +33,15 @@
 
 - `index.html` … 画面
 - `convert.js` … CSV 読み取り・集計・Excel 作成のロジック
+- `template.xlsx` … 出力の元になるテンプレート（サンプル推移表の数値を空にしたもの）
+- `template.js` … `template.xlsx` を埋め込んだもの（ページはこちらを使います）
+
+## 出力ファイルの書式
+
+出力はサンプル推移表をテンプレートにして、数値セルの値だけを書き換えて作ります。列幅・行の高さ・フォント・罫線・塗り・表示形式・数式・ゼロ非表示・印刷設定はサンプルと同一です。変わるのは数値、1行目の年、シート名（最終月の年）だけです。
+
+テンプレートの書式を変えたいときは、`template.xlsx` を差し替えて `template.js` を作り直してください。
+
+```bash
+printf 'window.PL_TEMPLATE_B64 = "%s";\n' "$(base64 -i template.xlsx | tr -d '\n')" > template.js
+```

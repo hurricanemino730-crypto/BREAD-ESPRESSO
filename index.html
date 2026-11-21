@@ -119,10 +119,11 @@ footer { color: var(--muted); font-size: 12px; text-align: center; margin-top: 2
     </section>
   </div>
 
-  <footer>処理はすべてブラウザ内で完結します。</footer>
+  <footer>出力ファイルは「サンプル推移表」と同じ書式（列幅・罫線・表示形式・数式・印刷設定）で作成されます。処理はすべてブラウザ内で完結します。</footer>
 </main>
 
-<script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="template.js"></script>
 <script src="convert.js"></script>
 <script>
 (function () {
@@ -278,8 +279,7 @@ footer { color: var(--muted); font-size: 12px; text-align: center; margin-top: 2
     const btn = $('download');
     btn.disabled = true;
     try {
-      const wb = C.buildWorkbook(window.ExcelJS, pl, current.values, { startYear: year });
-      const buf = await wb.xlsx.writeBuffer();
+      const buf = await C.buildXlsx(window.JSZip, C.base64ToBytes(window.PL_TEMPLATE_B64), pl, current.values, { startYear: year });
       const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);

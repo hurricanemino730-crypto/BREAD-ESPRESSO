@@ -179,131 +179,130 @@
     });
   }
 
-  // ---------- xlsx ----------
-  const COL = i => String.fromCharCode(66 + i); // B, C, ...
+  // ---------- xlsx（サンプル推移表のテンプレートに値を書き込む） ----------
+  const COLS = 'BCDEFGHIJKLM'.split('');
+  const TOTAL_COL = 'N';
+  const TEMPLATE_MONTHS = ['10月', '11月', '12月', '1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月'];
+  // テンプレートの行番号
+  const ROW = { '売上高': 3, '売上原価': 4, '営業外収益': 30, '営業外費用': 31 };
+  SGA_ITEMS.forEach((k, i) => { ROW[k] = 9 + i; });
 
   function monthNumber(label) { return parseInt(label, 10); }
 
+  function columnYears(months, startYear) {
+    const years = [];
+    let y = startYear;
+    months.forEach((m, i) => {
+      if (i > 0 && monthNumber(m) < monthNumber(months[i - 1])) y++;
+      years.push(y);
+    });
+    return years;
+  }
+
+  /** テンプレートの数式と同じ計算で、全セルの値を求める（'' は空文字） */
+  function computeGrid(values) {
+    const g = {};
+    const blank = v => (v === 0 ? '' : v); // 0 は空欄（テンプレートと同じ表示・#DIV/0! 回避）
+    const sum = a => a.reduce((x, y) => x + (typeof y === 'number' ? y : 0), 0);
+    const n = v => (typeof v === 'number' ? v : 0);
+    for (const [item, r] of Object.entries(ROW)) {
+      g[r] = values[item].map(blank);
+      g[r].push(sum(values[item]));
+    }
+    g[5] = []; g[6] = []; g[7] = []; g[8] = []; g[28] = []; g[29] = []; g[32] = [];
+    for (let i = 0; i <= 12; i++) {
+      const s = g[3][i];
+      g[5][i] = n(s) - n(g[4][i]);
+      g[6][i] = s === '' || n(s) === 0 ? '' : n(g[4][i]) / n(s);
+      g[7][i] = s === '' || n(s) === 0 ? '' : n(g[9][i]) / n(s);
+      g[8][i] = s === '' ? '' : n(g[6][i]) + n(g[7][i]);
+      let sga = 0;
+      for (let r = 9; r <= 27; r++) sga += n(g[r][i]);
+      g[28][i] = sga;
+      g[29][i] = g[5][i] - sga;
+      g[32][i] = g[29][i] + n(g[30][i]) - n(g[31][i]);
+    }
+    return g;
+  }
+
+  const xmlEsc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const numStr = v => (Number.isInteger(v) ? String(v) : String(Math.round(v * 1e15) / 1e15));
+
+  function fillSheet(xml, grid, months, years) {
+    const colIndex = c => (c === TOTAL_COL ? 12 : COLS.indexOf(c));
+    const sameMonths = months.length === 12 && months.every((m, i) => m === TEMPLATE_MONTHS[i]);
+
+    // 1行目：年（年が変わる列にだけ表示）
+    xml = xml.replace(/(<row r="1"[^>]*>)([\s\S]*?)(<\/row>)/, (m, open, inner, close) => {
+      const cells = years.map((y, i) => (i === 0 || y !== years[i - 1]) ? `<c r="${COLS[i]}1" s="28"><v>${y}</v></c>` : '').join('');
+      return open + cells + close;
+    });
+
+    return xml.replace(/<c r="([A-Z]+)(\d+)"([^>]*?)(\/>|>([\s\S]*?)<\/c>)/g, (m, col, rowStr, attrs, _e, body) => {
+      const row = +rowStr;
+      const ci = colIndex(col);
+      if (ci < 0) return m;
+      // 2行目：月の見出し（テンプレートと違う並びのときだけ書き換え）
+      if (row === 2) {
+        if (sameMonths || col === TOTAL_COL || ci >= months.length) return m;
+        const a = attrs.replace(/ t="[^"]*"/, '');
+        return `<c r="${col}2"${a} t="inlineStr"><is><t>${xmlEsc(months[ci])}</t></is></c>`;
+      }
+      const vals = grid[row];
+      if (!vals) return m;
+      const v = vals[ci];
+      const a = attrs.replace(/ t="[^"]*"/, '');
+      const f = body && (body.match(/<f[^>]*\/>|<f[^>]*>[\s\S]*?<\/f>/) || [])[0];
+      if (f) {
+        if (v === '' || v == null) return `<c r="${col}${row}"${a} t="str">${f}<v></v></c>`;
+        return `<c r="${col}${row}"${a}>${f}<v>${numStr(v)}</v></c>`;
+      }
+      if (v === '' || v == null) return `<c r="${col}${row}"${a}/>`;
+      return `<c r="${col}${row}"${a}><v>${numStr(v)}</v></c>`;
+    });
+  }
+
   /**
-   * @param ExcelJS ExcelJS ライブラリ
+   * サンプル推移表と同じ書式の xlsx を作る
+   * @param JSZip JSZip ライブラリ
+   * @param template テンプレート xlsx のバイト列（Uint8Array / ArrayBuffer）
    * @param pl parsePL の結果
    * @param values aggregate().values
    * @param opts { startYear: 最初の月の年 }
+   * @returns Promise<Uint8Array>
    */
-  function buildWorkbook(ExcelJS, pl, values, opts) {
-    const n = pl.months.length;
-    const last = COL(n - 1);
-    const T = COL(n); // 合計列
-    const startYear = opts.startYear;
+  const NO_DIRS = { createFolders: false };
+  async function buildXlsx(JSZip, template, pl, values, opts) {
+    if (pl.months.length !== 12) throw new Error('12か月分の列があるCSVにのみ対応しています（このCSVは' + pl.months.length + '列）。');
+    const years = columnYears(pl.months, opts.startYear);
+    const sheetName = String(years[11]);
+    const zip = await JSZip.loadAsync(template);
+    const sheetPath = 'xl/worksheets/sheet1.xml';
+    const sheet = await zip.file(sheetPath).async('string');
+    zip.file(sheetPath, fillSheet(sheet, computeGrid(values), pl.months, years), NO_DIRS);
 
-    // 各列の年（1月をまたいだら翌年）
-    const years = [];
-    let y = startYear;
-    pl.months.forEach((m, i) => {
-      if (i > 0 && monthNumber(m) < monthNumber(pl.months[i - 1])) y++;
-      years.push(y);
-    });
+    let wbXml = await zip.file('xl/workbook.xml').async('string');
+    wbXml = wbXml.replace(/(<sheet [^>]*name=")[^"]*(")/, `$1${sheetName}$2`)
+      .replace(/<calcPr([^>]*?)\/>/, (m, a) => `<calcPr${a.replace(/ fullCalcOnLoad="[^"]*"/, '')} fullCalcOnLoad="1"/>`);
+    zip.file('xl/workbook.xml', wbXml, NO_DIRS);
 
-    const wb = new ExcelJS.Workbook();
-    wb.calcProperties.fullCalcOnLoad = true;
-    const ws = wb.addWorksheet(String(years[n - 1]), { views: [{ showGridLines: false }] });
-
-    const FONT = { name: 'Yu Gothic UI', size: 11 };
-    const NUM = '#,##0_);[Red](#,##0)';
-    const PL = '#,##0;"△ "#,##0';
-    const PCT = '0.0%';
-
-    ws.getColumn(1).width = 18.55;
-    for (let i = 0; i <= n; i++) ws.getColumn(i + 2).width = 16.11;
-
-    // 1行目：年
-    ws.getRow(1).height = 19.5;
-    years.forEach((yy, i) => {
-      if (i === 0 || yy !== years[i - 1]) {
-        const c = ws.getCell(COL(i) + '1');
-        c.value = yy; c.numFmt = '0_ '; c.font = FONT;
-      }
-    });
-
-    // 2行目：見出し
-    const h = ws.getRow(2);
-    h.getCell(1).value = '勘定科目';
-    pl.months.forEach((m, i) => { h.getCell(i + 2).value = m; });
-    h.getCell(n + 2).value = '合計';
-    h.eachCell(c => { c.font = { ...FONT, bold: true }; c.alignment = { horizontal: c.col === 1 ? 'left' : 'center' }; });
-
-    const d = derive(values, n);
-    const sum = a => a.reduce((x, y2) => x + y2, 0);
-    let r = 3;
-    const rowOf = {};
-
-    function dataRow(label, arr, o) {
-      o = o || {};
-      const row = ws.getRow(r);
-      rowOf[label] = r;
-      row.getCell(1).value = label;
-      row.getCell(1).font = FONT;
-      for (let i = 0; i < n; i++) {
-        const c = row.getCell(i + 2);
-        c.value = arr[i];
-        c.numFmt = o.fmt || NUM; c.font = FONT;
-      }
-      const t = row.getCell(n + 2);
-      t.value = { formula: `SUM(B${r}:${last}${r})`, result: sum(arr) };
-      t.numFmt = o.fmt || NUM; t.font = { ...FONT, bold: !!o.boldTotal };
-      r++;
+    const app = zip.file('docProps/app.xml');
+    if (app) {
+      const x = await app.async('string');
+      zip.file('docProps/app.xml', x.replace(/(<TitlesOfParts>[\s\S]*?<vt:lpstr>)[^<]*(<\/vt:lpstr>)/, `$1${sheetName}$2`), NO_DIRS);
     }
-
-    function formulaRow(label, fn, results, o) {
-      o = o || {};
-      const row = ws.getRow(r);
-      rowOf[label] = r;
-      row.getCell(1).value = label;
-      row.getCell(1).font = FONT;
-      for (let i = 0; i <= n; i++) {
-        const c = row.getCell(i + 2);
-        const L = COL(i);
-        c.value = { formula: fn(L, i === n), result: results[i] };
-        c.numFmt = o.fmt || NUM; c.font = FONT;
-        if (o.fill) c.fill = o.fill;
-        if (o.top) c.border = { top: { style: 'thin' } };
-      }
-      if (o.fill) row.getCell(1).fill = o.fill;
-      if (o.top) row.getCell(1).border = { top: { style: 'thin' } };
-      r++;
-    }
-
-    const salesT = sum(values['売上高']);
-    const cogsT = sum(values['売上原価']);
-    const laborT = sum(values['人件費']);
-    const ratio = (a, b) => (b ? a / b : '');
-    const withTotal = (arr, total) => arr.concat([total]);
-
-    dataRow('売上高', values['売上高'], { boldTotal: true });           // 3
-    dataRow('売上原価', values['売上原価']);                            // 4
-    formulaRow('売上総損益', L => `${L}3-${L}4`,
-      withTotal(d.map(x => x.gross), salesT - cogsT));                // 5
-    formulaRow('原価率', L => `IF(${L}3="","",${L}4/${L}3)`,
-      withTotal(values['売上原価'].map((v, i) => ratio(v, values['売上高'][i])), ratio(cogsT, salesT)), { fmt: PCT }); // 6
-    formulaRow('人件費率', L => `IF(${L}3="","",${L}9/${L}3)`,
-      withTotal(values['人件費'].map((v, i) => ratio(v, values['売上高'][i])), ratio(laborT, salesT)), { fmt: PCT }); // 7
-    const fl = (c, l, s) => (s ? c / s + l / s : '');
-    formulaRow('FL', L => `IF(${L}3="","",SUM(${L}6:${L}7))`,
-      withTotal(values['売上高'].map((s, i) => fl(values['売上原価'][i], values['人件費'][i], s)), fl(cogsT, laborT, salesT)), { fmt: PCT }); // 8
-    SGA_ITEMS.forEach(k => dataRow(k, values[k], { boldTotal: k === '人件費' })); // 9-27
-    const sgaT = sum(d.map(x => x.sga));
-    formulaRow('販売管理費計', L => `SUM(${L}9:${L}27)`, withTotal(d.map(x => x.sga), sgaT), { top: true }); // 28
-    const opT = salesT - cogsT - sgaT;
-    const band = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF2F2F2' } };
-    formulaRow('営業損益金額', L => `${L}5-${L}28`, withTotal(d.map(x => x.op), opT), { fmt: PL, fill: band }); // 29
-    dataRow('営業外収益', values['営業外収益']);                        // 30
-    dataRow('営業外費用', values['営業外費用']);                        // 31
-    const ordT = opT + sum(values['営業外収益']) - sum(values['営業外費用']);
-    formulaRow('経常損益金額', L => `${L}29+${L}30-${L}31`, withTotal(d.map(x => x.ord), ordT), { fmt: PL, fill: band }); // 32
-
-    for (let i = 3; i < r; i++) ws.getRow(i).getCell(1).alignment = { horizontal: 'left' };
-    return wb;
+    return zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
   }
 
-  return { ITEMS, SGA_ITEMS, EXCLUDE, decode, parseCSV, parsePL, defaultMapping, lineKey, aggregate, derive, checks, buildWorkbook };
+  function base64ToBytes(b64) {
+    if (typeof atob === 'function') {
+      const bin = atob(b64);
+      const out = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+      return out;
+    }
+    return new Uint8Array(Buffer.from(b64, 'base64'));
+  }
+
+  return { ITEMS, SGA_ITEMS, EXCLUDE, decode, parseCSV, parsePL, defaultMapping, lineKey, aggregate, derive, checks, computeGrid, buildXlsx, base64ToBytes };
 });
